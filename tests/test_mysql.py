@@ -14,7 +14,7 @@ from uuid import uuid4
 import mysql.connector
 
 from db import connection_settings, database_cursor
-from main import DEMO_ADMIN_PASSWORD, Terminal
+from main import DEMO_ADMIN_PASSWORD, main_menu
 from store import Marketplace, StoreError, total_price
 from update_catalogue import update_catalogue
 
@@ -241,7 +241,7 @@ class MySQLTests(unittest.TestCase):
             patch("main.getpass", side_effect=["wrong", DEMO_ADMIN_PASSWORD]),
             redirect_stdout(output),
         ):
-            Terminal(self.store).run()
+            main_menu(self.store)
         terminal_text = output.getvalue()
         for heading, count in (
             ("Browse Games", 32),

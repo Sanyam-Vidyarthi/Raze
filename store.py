@@ -1,6 +1,5 @@
 """Catalogue, cart and purchasing rules shared by any RAZE interface."""
 
-import re
 from decimal import Decimal
 
 from mysql.connector import IntegrityError, errorcode
@@ -35,13 +34,29 @@ def validate_text(value, label, max_length):
 
 
 def parse_price(value):
-    if not re.fullmatch(r"[0-9]{1,8}(\.[0-9]{1,2})?", value.strip()):
-        raise StoreError("Enter a price from 0 to 99999999.99 with at most two decimal places.")
+    value = value.strip()
+    parts = value.split(".")
+    message = "Enter a price from 0 to 99999999.99 with at most two decimal places."
+    if len(parts) > 2:
+        raise StoreError(message)
+    if not parts[0].isascii() or not parts[0].isdigit() or len(parts[0]) > 8:
+        raise StoreError(message)
+    if len(parts) == 2:
+        paise = parts[1]
+        if not paise.isascii() or not paise.isdigit() or len(paise) > 2:
+            raise StoreError(message)
     return Decimal(value)
 
 
 def total_price(games):
-    return sum((game["price"] for game in games), Decimal("0.00"))
+    total = Decimal("0.00")
+    for game in games:
+        total += game["price"]
+    return total
+
+
+def order_date_and_id(order):
+    return order["purchased_at"], order["id"]
 
 
 def check_purchasable(game):
@@ -52,11 +67,13 @@ def check_purchasable(game):
 
 
 class Marketplace:
+    """Keep one cart and one set of connection settings per session."""
+
     def __init__(self, settings):
         self.settings = settings
         self.cart_ids = []
 
-    def catalogue(self, *, search=None, genre=None, include_unavailable=False):
+    def catalogue(self, search=None, genre=None, include_unavailable=False):
         filters = []
         params = []
         if not include_unavailable:
@@ -82,7 +99,11 @@ class Marketplace:
             cursor.execute(
                 "SELECT DISTINCT genre FROM games WHERE is_available = TRUE ORDER BY genre"
             )
-            return [row["genre"] for row in cursor.fetchall()]
+            rows = cursor.fetchall()
+        genres = []
+        for row in rows:
+            genres.append(row["genre"])
+        return genres
 
     def get_game(self, game_id):
         with database_cursor(self.settings) as cursor:
@@ -128,11 +149,15 @@ class Marketplace:
 
     def checkout(self, confirmed_games):
         """Record the complete order at the prices the customer confirmed."""
-        confirmed = {game["id"]: (game["title"], game["price"]) for game in confirmed_games}
-        if not self.cart_ids or set(confirmed) != set(self.cart_ids):
+        confirmed = {}
+        for game in confirmed_games:
+            confirmed[game["id"]] = (game["title"], game["price"])
+
+        sorted_cart = sorted(self.cart_ids)
+        if not sorted_cart or sorted(confirmed) != sorted_cart:
             raise StoreError("The cart changed. Review it and confirm checkout again.")
 
-        game_ids = tuple(sorted(confirmed))
+        game_ids = tuple(sorted_cart)
         placeholders = ", ".join(["%s"] * len(game_ids))
         with database_cursor(self.settings, write=True) as cursor:
             # Lock catalogue rows before reading ownership. Another checkout of
@@ -149,7 +174,9 @@ class Marketplace:
                 f"SELECT game_id FROM order_items WHERE game_id IN ({placeholders})",
                 game_ids,
             )
-            owned_ids = {row["game_id"] for row in cursor.fetchall()}
+            owned_ids = []
+            for row in cursor.fetchall():
+                owned_ids.append(row["game_id"])
             for game in games:
                 game["owned"] = game["id"] in owned_ids
                 check_purchasable(game)
@@ -180,10 +207,9 @@ class Marketplace:
             return cursor.fetchall()
 
     def save_game(self, details, game_id=None):
-        fields = [
-            validate_text(details[key], label, length)
-            for key, label, length in GAME_FIELDS
-        ]
+        fields = []
+        for key, label, length in GAME_FIELDS:
+            fields.append(validate_text(details[key], label, length))
         fields.append(parse_price(details["price"]))
 
         try:
@@ -196,10 +222,11 @@ class Marketplace:
                     )
                     return cursor.lastrowid
 
+                fields.append(game_id)
                 cursor.execute(
                     """UPDATE games SET title = %s, genre = %s, developer = %s,
                                         platform = %s, price = %s WHERE id = %s""",
-                    (*fields, game_id),
+                    tuple(fields),
                 )
                 # MySQL reports zero changed rows when every value stayed the same.
                 if cursor.rowcount == 0:
@@ -225,7 +252,9 @@ class Marketplace:
                 (available, game_id, available),
             )
             if cursor.rowcount == 0:
-                status = "on sale" if available else "off sale"
+                status = "off sale"
+                if available:
+                    status = "on sale"
                 raise StoreError(f"That game is already {status} or its ID does not exist.")
 
     def sales_summary(self):
@@ -253,7 +282,5 @@ class Marketplace:
         return {
             "games_sold": len(purchases),
             "revenue": total_price(purchases),
-            "orders": sorted(
-                orders.values(), key=lambda order: (order["purchased_at"], order["id"]), reverse=True
-            ),
+            "orders": sorted(orders.values(), key=order_date_and_id, reverse=True),
         }

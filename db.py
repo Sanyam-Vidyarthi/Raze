@@ -1,7 +1,7 @@
 """MySQL settings, connection and transaction lifetime."""
 
 import os
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from getpass import getpass
 
 import mysql.connector
@@ -11,10 +11,10 @@ def connection_settings():
     """Load local settings and prompt for the MySQL password if needed."""
     try:
         port = int(os.getenv("RAZE_DB_PORT", "3306"))
-        if not 1 <= port <= 65535:
-            raise ValueError
     except ValueError:
         raise ValueError("RAZE_DB_PORT must be a number from 1 to 65535.") from None
+    if not 1 <= port <= 65535:
+        raise ValueError("RAZE_DB_PORT must be a number from 1 to 65535.")
 
     user = os.getenv("RAZE_DB_USER", "root")
     password = os.getenv("RAZE_DB_PASSWORD")
@@ -33,7 +33,7 @@ def connection_settings():
 
 
 @contextmanager
-def database_cursor(settings, *, write=False):
+def database_cursor(settings, write=False):
     """Give each operation its own connection and commit only completed writes."""
     with mysql.connector.connect(**settings) as connection:
         with connection.cursor(dictionary=True) as cursor:
@@ -42,9 +42,11 @@ def database_cursor(settings, *, write=False):
                 if write:
                     connection.commit()
             except BaseException:
-                # If the connection itself failed, preserve the original error.
-                with suppress(mysql.connector.Error):
+                # Roll back even on Ctrl+C. Keep the original error if rollback fails.
+                try:
                     connection.rollback()
+                except mysql.connector.Error:
+                    pass
                 raise
 
 

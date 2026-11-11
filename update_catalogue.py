@@ -9,9 +9,10 @@ from db import connection_settings, database_cursor, database_error_message
 
 def update_catalogue(settings):
     setup = Path(__file__).with_name("setup.sql").read_text(encoding="utf-8")
-    _, marker, seed = setup.partition("-- Catalogue seed\n")
-    if not marker:
+    parts = setup.split("-- Catalogue seed\n", 1)
+    if len(parts) != 2:
         raise ValueError("Catalogue seed is missing from setup.sql.")
+    seed = parts[1]
     seed = seed.replace("INSERT INTO games ", "INSERT INTO catalogue_seed ", 1)
     seed = seed.replace("id = games.id", "id = catalogue_seed.id", 1)
 

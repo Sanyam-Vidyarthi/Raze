@@ -57,7 +57,10 @@ The cart holds game IDs in memory. The `games` table stores catalogue data and s
 
 ### Concepts for the viva
 
+Trace a checkout from `main_menu()` to `cart_menu()` and then to `Marketplace.checkout()`. The menus use ordinary loops and `if/elif` statements. The `Marketplace` object keeps the cart and MySQL settings together for one session.
+
 - **Transactions.** Checkout validates the cart, inserts the order and adds each item in one transaction. `commit()` saves the complete purchase. If a write fails, `rollback()` undoes the earlier writes in that checkout.
+- **Resource cleanup.** The `with database_cursor(...)` block gives the operation a cursor and closes it and the connection when the block finishes. The shared helper also handles rollback when the operation is interrupted.
 - **Row locks and keys.** `SELECT ... FOR UPDATE` locks selected game rows while checkout checks availability, ownership and the confirmed prices. The primary key on `order_items.game_id` enforces one purchase per game for the shared library. Foreign keys link each purchase to an existing game and order.
 - **Exact prices.** MySQL `DECIMAL` and Python `Decimal` represent rupees and paise exactly. Storing `price_paid` in the order item preserves the sale price when an administrator edits the catalogue price.
 - **Parameterized SQL and soft deletion.** Values supplied through `cursor.execute()` parameters are treated as data, including titles with apostrophes. Removing a game from sale updates its availability flag, preserving the catalogue row referenced by past purchases.
