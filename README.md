@@ -13,7 +13,7 @@ Use Python 3.12 and MySQL Server 8.0.16 or later. The app was tested with Python
    ```powershell
    Set-Location D:\Tech\Raze
    py -3.12 -m venv .venv
-   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   .\.venv\Scripts\python.exe -m pip install mysql-connector-python==26.10.0
    .\.venv\Scripts\python.exe main.py
    ```
 
@@ -27,7 +27,7 @@ From the project directory, run `.\.venv\Scripts\python.exe update_catalogue.py`
 
 ### Connection settings
 
-Set these PowerShell environment variables before launching if your server uses different settings. The defaults are in `db.py`.
+Set these PowerShell environment variables before launching if your server uses different settings. The defaults are in `store.py`.
 
 | Variable | Default |
 | --- | --- |
@@ -42,25 +42,27 @@ For example, `$env:RAZE_DB_PORT = '3307'` sets the port for the current PowerShe
 
 Open Browse Games, Search Games or Browse by Genre. Enter the number next to a game in the current list to see its details and add it to your cart. Numbering starts at 1 in each list. Repeat for a second game. Open Shopping Cart, select Checkout and confirm the simulated purchase. Both games will appear in My Game Library, including after you close and reopen RAZE.
 
-In the Administrator Panel, choose **Put a Game Back on Sale** to restore a game to customer browsing. **View Sales Summary** shows total orders, games purchased, simulated revenue and the games and prices paid in each order.
+In the Administrator Panel, choose **Put a Game Back on Sale** to restore a game to customer browsing. **View Sales Summary** shows games purchased and simulated revenue. My Game Library shows each purchased game and the price paid.
 
-## Code and database
+## School submission files
 
 | File | Responsibility |
 | --- | --- |
 | `main.py` | Terminal menus, prompts and formatting |
-| `store.py` | Catalogue queries, cart rules, checkout, library and admin operations |
-| `db.py` | MySQL settings, connection handling and transaction boundaries |
+| `store.py` | MySQL connectivity, catalogue queries, cart rules, checkout, library and admin operations |
 | `setup.sql` | Tables, constraints and the initial catalogue |
 
-The cart holds game IDs in memory. The `games` table stores catalogue data and sale availability. One `orders` row represents a completed checkout, and one `order_items` row per game stores its order ID and price paid. The library and sales summary query those purchase records. A Tkinter interface can call the same `Marketplace` methods.
+These three files are sufficient with MySQL Connector/Python installed. The repository also includes a dependency list, automated tests and the optional catalogue updater.
+
+The cart holds game IDs in memory. The `games` table stores catalogue data and sale availability. One `orders` row represents a completed checkout, and one `order_items` row per game stores its order ID and price paid. The library and sales summary read those purchase records.
 
 ### Concepts for the viva
 
-Trace a checkout from `main_menu()` to `cart_menu()` and then to `Marketplace.checkout()`. The menus use ordinary loops and `if/elif` statements. The `Marketplace` object keeps the cart and MySQL settings together for one session.
+Trace a checkout from `main_menu()` to `cart_menu()` and then to `store.checkout()`. The menus use ordinary loops and `if/elif` statements. A list holds the session's cart and a dictionary holds its connection settings.
 
+- **Python and MySQL.** `connect_database()` calls `mysql.connector.connect()`. A cursor runs SQL and fetches results. Browse uses `SELECT`, adding a game uses `INSERT`, and editing or changing sale availability uses `UPDATE`.
 - **Transactions.** Checkout validates the cart, inserts the order and adds each item in one transaction. `commit()` saves the complete purchase. If a write fails, `rollback()` undoes the earlier writes in that checkout.
-- **Resource cleanup.** The `with database_cursor(...)` block gives the operation a cursor and closes it and the connection when the block finishes. The shared helper also handles rollback when the operation is interrupted.
+- **Resource cleanup.** A `finally` block closes the cursor and connection when a database operation ends. Checkout also attempts rollback if interrupted.
 - **Row locks and keys.** `SELECT ... FOR UPDATE` locks selected game rows while checkout checks availability, ownership and the confirmed prices. The primary key on `order_items.game_id` enforces one purchase per game for the shared library. Foreign keys link each purchase to an existing game and order.
 - **Exact prices.** MySQL `DECIMAL` and Python `Decimal` represent rupees and paise exactly. Storing `price_paid` in the order item preserves the sale price when an administrator edits the catalogue price.
 - **Parameterized SQL and soft deletion.** Values supplied through `cursor.execute()` parameters are treated as data, including titles with apostrophes. Removing a game from sale updates its availability flag, preserving the catalogue row referenced by past purchases.

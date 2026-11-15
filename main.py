@@ -2,13 +2,12 @@
 
 import sys
 from getpass import getpass
-from shutil import get_terminal_size
 from textwrap import wrap
 
 from mysql.connector import Error as MySQLError
 
-from db import connection_settings, database_error_message
-from store import GAME_FIELDS, Marketplace, StoreError, parse_price, total_price, validate_text
+import store
+from store import StoreError
 
 
 DEMO_ADMIN_PASSWORD = "raze-admin"
@@ -55,73 +54,33 @@ def status(game):
 
 
 def show_games(games, price_label="Price", show_availability=False):
-    headers = ("No.", "Game", "Genre", price_label, "Status")
-    rows = []
-    has_status = False
+    print(f'{"No.":>3} {"Game":26} {"Genre":19} {price_label:>14} Status')
+    print("-" * 79)
     for index in range(len(games)):
         game = games[index]
+        title_lines = wrap(game["title"], 26, break_on_hyphens=False)
+        genre_lines = wrap(game["genre"], 19, break_on_hyphens=False)
         price = "—"
         if game["price"] is not None:
             price = money(game["price"])
-
         game_status = status(game)
         if show_availability:
             if game["is_available"]:
                 game_status = "For sale"
             else:
                 game_status = "Off sale"
-        if game_status:
-            has_status = True
-        rows.append((str(index + 1), game["title"], game["genre"], price, game_status))
 
-    if not has_status:
-        headers = headers[:4]
-    column_count = len(headers)
-    widths = []
-    for column in range(column_count):
-        width = len(headers[column])
-        for row in rows:
-            width = max(width, len(row[column]))
-        widths.append(width)
-
-    terminal_width = get_terminal_size(fallback=(100, 24)).columns - 1
-    gap = "  "
-    if sum(widths) + len(gap) * (column_count - 1) > terminal_width:
-        gap = " "
-    gap_width = len(gap) * (column_count - 1)
-    fixed_width = widths[0] + sum(widths[3:]) + gap_width
-    # On narrow terminals, wrap long titles and genres while keeping numbers and prices intact.
-    text_width = max(len("Game") + len("Genre"), terminal_width - fixed_width)
-    widths[2] = min(widths[2], max(len("Genre"), text_width // 2))
-    widths[1] = min(widths[1], text_width - widths[2])
-
-    print_table_row(headers, widths, gap)
-    print("-" * (sum(widths) + gap_width))
-    for row in rows:
-        columns = []
-        row_height = 0
-        for column in range(column_count):
-            lines = wrap(row[column], widths[column], break_on_hyphens=False)
-            columns.append(lines)
-            row_height = max(row_height, len(lines))
-        for line in range(row_height):
-            cells = []
-            for column in columns:
-                if line < len(column):
-                    cells.append(column[line])
-                else:
-                    cells.append("")
-            print_table_row(cells, widths, gap)
-
-
-def print_table_row(cells, widths, gap):
-    aligned = []
-    for index in range(len(cells)):
-        if index in (0, 3):  # The number and price columns align to the right.
-            aligned.append(cells[index].rjust(widths[index]))
-        else:
-            aligned.append(cells[index].ljust(widths[index]))
-    print(gap.join(aligned).rstrip())
+        for line in range(max(len(title_lines), len(genre_lines))):
+            title = ""
+            genre = ""
+            if line < len(title_lines):
+                title = title_lines[line]
+            if line < len(genre_lines):
+                genre = genre_lines[line]
+            if line == 0:
+                print(f"{index + 1:>3} {title:26} {genre:19} {price:>14} {game_status}".rstrip())
+            else:
+                print(f"    {title:26} {genre}".rstrip())
 
 
 def show_details(game, price_label="Price"):
@@ -137,7 +96,7 @@ def show_details(game, price_label="Price"):
 
 def show_error(error):
     if isinstance(error, MySQLError):
-        message = database_error_message(error)
+        message = store.database_error_message(error)
     else:
         message = str(error)
     print(f"\n{message}")
@@ -160,7 +119,7 @@ def read_menu_choice(options, exit_label="Back"):
         print("Choose one of the numbered options.")
 
 
-def main_menu(store):
+def main_menu(settings, cart_ids):
     options = (
         "Browse Games",
         "Search Games",
@@ -176,28 +135,28 @@ def main_menu(store):
             if choice == 0:
                 return
             if choice == 1:
-                game_picker(store, "Browse Games", store.catalogue())
+                game_picker(settings, cart_ids, "Browse Games", store.catalogue(settings))
             elif choice == 2:
-                search(store)
+                search(settings, cart_ids)
             elif choice == 3:
-                browse_genres(store)
+                browse_genres(settings, cart_ids)
             elif choice == 4:
-                cart_menu(store)
+                cart_menu(settings, cart_ids)
             elif choice == 5:
-                library(store)
+                library(settings)
             elif choice == 6:
-                admin_menu(store)
+                admin_menu(settings)
         except (StoreError, MySQLError) as error:
             show_error(error)
 
 
-def search(store):
+def search(settings, cart_ids):
     term = input("Search by title (blank to go back): ").strip()
     if term:
-        game_picker(store, "Search Results", store.catalogue(search=term))
+        game_picker(settings, cart_ids, "Search Results", store.catalogue(settings, search=term))
 
-def browse_genres(store):
-    genres = store.genres()
+def browse_genres(settings, cart_ids):
+    genres = store.genres(settings)
     if not genres:
         print("There are no genres available to browse.")
         return
@@ -209,12 +168,12 @@ def browse_genres(store):
             return
         genre = genres[choice - 1]
         try:
-            game_picker(store, genre, store.catalogue(genre=genre))
+            game_picker(settings, cart_ids, genre, store.catalogue(settings, genre=genre))
         except (StoreError, MySQLError) as error:
             show_error(error)
 
 
-def game_picker(store, title, games):
+def game_picker(settings, cart_ids, title, games):
     heading(title)
     if not games:
         print("No games found.")
@@ -226,22 +185,22 @@ def game_picker(store, title, games):
 
     show_details(game)
     if not game["owned"] and confirm("Add to cart?"):
-        store.add_to_cart(game["id"])
+        store.add_to_cart(settings, cart_ids, game["id"])
         print(f'{game["title"]} added to your cart.')
 
-def cart_menu(store):
+def cart_menu(settings, cart_ids):
     options = ("Remove a Game", "Checkout")
     while True:
         heading("Shopping Cart")
         try:
-            games = show_cart(store)
+            games = show_cart(settings, cart_ids)
             choice = read_menu_choice(options)
             if choice == 0:
                 return
             if choice == 1:
-                remove_cart_game(store, games)
+                remove_cart_game(cart_ids, games)
             elif choice == 2:
-                checkout(store)
+                checkout(settings, cart_ids)
         except StoreError as error:
             show_error(error)
         except MySQLError as error:
@@ -249,9 +208,9 @@ def cart_menu(store):
             return
 
 
-def show_cart(store):
-    catalogue_games = store.cart_games()
-    total = total_price(catalogue_games)
+def show_cart(settings, cart_ids):
+    catalogue_games = store.cart_games(settings, cart_ids)
+    total = store.total_price(catalogue_games)
 
     # A deleted catalogue row can still be removed from the session's cart.
     games_by_id = {}
@@ -259,7 +218,7 @@ def show_cart(store):
         games_by_id[game["id"]] = game
 
     games = []
-    for game_id in sorted(store.cart_ids):
+    for game_id in sorted(cart_ids):
         if game_id in games_by_id:
             games.append(games_by_id[game_id])
         else:
@@ -279,29 +238,30 @@ def show_cart(store):
     return games
 
 
-def remove_cart_game(store, games):
+def remove_cart_game(cart_ids, games):
     if not games:
         print("Your cart is empty.")
         return
     game = select_game(games, "remove it from your cart")
     if game is not None:
-        store.remove_from_cart(game["id"])
+        store.remove_from_cart(cart_ids, game["id"])
         print("Game removed from your cart.")
 
-def checkout(store):
-    games = store.checkout_quote()
+def checkout(settings, cart_ids):
+    games = store.checkout_quote(settings, cart_ids)
     heading("Confirm Simulated Purchase")
-    show_games(games)
-    print(f"Final total  {money(total_price(games))}")
+    for game in games:
+        print(f'  {game["title"]}  {money(game["price"])}')
+    print(f"Final total  {money(store.total_price(games))}")
     if not confirm("Complete this simulated purchase?"):
         print("Checkout cancelled. Your cart is saved for this session.")
         return
-    order_id = store.checkout(games)
+    order_id = store.checkout(settings, cart_ids, games)
     print(f"Order #{order_id} complete. Find your games in My Game Library.")
 
-def library(store):
+def library(settings):
     heading("My Game Library")
-    games = store.library()
+    games = store.library(settings)
     if not games:
         print("Your library is empty.")
         return
@@ -311,7 +271,7 @@ def library(store):
         show_details(game, price_label="Paid")
         print(f'Order      #{game["order_id"]} on {game["purchased_at"]:%d %b %Y}')
 
-def admin_menu(store):
+def admin_menu(settings):
     password = getpass("Demo administrator password (blank to go back): ")
     if not password:
         return
@@ -334,29 +294,29 @@ def admin_menu(store):
             if choice == 0:
                 return
             if choice == 1:
-                admin_catalogue(store)
+                admin_catalogue(settings)
             elif choice == 2:
-                add_game(store)
+                add_game(settings)
             elif choice == 3:
-                edit_game(store)
+                edit_game(settings)
             elif choice == 4:
-                delist_game(store)
+                delist_game(settings)
             elif choice == 5:
-                sales(store)
+                sales(settings)
             elif choice == 6:
-                relist_game(store)
+                relist_game(settings)
         except (StoreError, MySQLError) as error:
             show_error(error)
 
 
-def admin_catalogue(store):
+def admin_catalogue(settings):
     heading("Full Catalogue")
-    game = select_admin_game(store, "view its details")
+    game = select_admin_game(settings, "view its details")
     if game is not None:
         show_details(game)
 
-def select_admin_game(store, action, off_sale_only=False):
-    games = store.catalogue(include_unavailable=True)
+def select_admin_game(settings, action, off_sale_only=False):
+    games = store.catalogue(settings, include_unavailable=True)
     if off_sale_only:
         off_sale_games = []
         for game in games:
@@ -374,61 +334,51 @@ def select_admin_game(store, action, off_sale_only=False):
     return select_game(games, action)
 
 
-def add_game(store):
+def add_game(settings):
     heading("Add a Game")
     details = game_form()
     if confirm("Add this game to the catalogue?"):
-        store.save_game(details)
+        store.save_game(settings, details)
         print(f'{details["title"]} added to the catalogue.')
 
-def edit_game(store):
-    game = select_admin_game(store, "edit it")
+def edit_game(settings):
+    game = select_admin_game(settings, "edit it")
     if game is not None:
         heading(f'Edit {game["title"]}')
         print("Press Enter to keep the current value.")
         details = game_form(game)
         if confirm("Save these changes?"):
-            store.save_game(details, game["id"])
+            store.save_game(settings, details, game["id"])
             print("Game details saved.")
 
-def delist_game(store):
-    game = select_admin_game(store, "remove it from sale")
+def delist_game(settings):
+    game = select_admin_game(settings, "remove it from sale")
     if game is not None:
         if not game["is_available"]:
             print("That game is already off sale.")
         elif confirm(f'Remove {game["title"]} from sale?'):
-            store.remove_from_sale(game["id"])
+            store.remove_from_sale(settings, game["id"])
             print("Game removed from sale. Existing purchases are still in the library.")
 
-def relist_game(store):
+def relist_game(settings):
     heading("Put a Game Back on Sale")
-    game = select_admin_game(store, "put it back on sale", off_sale_only=True)
+    game = select_admin_game(settings, "put it back on sale", off_sale_only=True)
     if game is not None and confirm(f'Put {game["title"]} back on sale?'):
-        store.put_back_on_sale(game["id"])
+        store.put_back_on_sale(settings, game["id"])
         print(f'{game["title"]} is back on sale.')
 
-def sales(store):
-    report = store.sales_report()
-    orders = report["orders"]
+def sales(settings):
+    summary = store.sales_summary(settings)
     heading("Sales Summary")
-    print(f'Orders completed   {len(orders):,}')
-    print(f'Games purchased    {report["games_sold"]:,}')
-    print(f'Simulated revenue  {money(report["revenue"])}')
-    if not orders:
-        print("\nNo purchases recorded yet.")
-        return
-
-    heading("Order History (newest first)")
-    for order in orders:
-        heading(f'Order #{order["id"]} | {order["purchased_at"]:%d %b %Y, %I:%M %p}')
-        games = order["games"]
-        show_games(games, price_label="Paid")
-        print(f"Order total  {money(total_price(games))}")
+    print(f'Games purchased    {summary["games_sold"]:,}')
+    print(f'Simulated revenue  {money(summary["revenue"])}')
+    if summary["games_sold"] == 0:
+        print("No purchases recorded yet.")
 
 
 def game_form(current=None):
     details = {}
-    for key, label, length in GAME_FIELDS:
+    for key, label, length in store.GAME_FIELDS:
         prompt = f"{label}: "
         if current is not None:
             prompt = f"{label} [{current[key]}]: "
@@ -437,7 +387,7 @@ def game_form(current=None):
             if not value and current is not None:
                 value = current[key]
             try:
-                details[key] = validate_text(value, label, length)
+                details[key] = store.validate_text(value, label, length)
                 break
             except StoreError as error:
                 show_error(error)
@@ -450,7 +400,7 @@ def game_form(current=None):
         if not value and current is not None:
             value = str(current["price"])
         try:
-            parse_price(value)
+            store.parse_price(value)
             details["price"] = value
             return details
         except StoreError as error:
@@ -461,9 +411,10 @@ def main():
     # Use UTF-8 for the rupee symbol in both the console and redirected output.
     sys.stdout.reconfigure(encoding="utf-8")
     try:
-        store = Marketplace(connection_settings())
-        store.sales_summary()  # Detect configuration or setup errors before opening the menu.
-        main_menu(store)
+        settings = store.connection_settings()
+        cart_ids = []
+        store.sales_summary(settings)  # Detect configuration or setup errors before opening the menu.
+        main_menu(settings, cart_ids)
     except (KeyboardInterrupt, EOFError):
         print("\nSession ended.")
     except (ValueError, MySQLError) as error:

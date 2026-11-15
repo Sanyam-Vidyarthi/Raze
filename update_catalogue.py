@@ -4,7 +4,13 @@ from pathlib import Path
 
 from mysql.connector import Error
 
-from db import connection_settings, database_cursor, database_error_message
+from store import (
+    close_database,
+    connect_database,
+    connection_settings,
+    database_error_message,
+    rollback_write,
+)
 
 
 def update_catalogue(settings):
@@ -16,7 +22,10 @@ def update_catalogue(settings):
     seed = seed.replace("INSERT INTO games ", "INSERT INTO catalogue_seed ", 1)
     seed = seed.replace("id = games.id", "id = catalogue_seed.id", 1)
 
-    with database_cursor(settings, write=True) as cursor:
+    connection = connect_database(settings)
+    cursor = None
+    try:
+        cursor = connection.cursor(dictionary=True)
         cursor.execute("CREATE TEMPORARY TABLE catalogue_seed LIKE games")
         cursor.execute(seed)
         cursor.execute("SELECT COUNT(*) AS total FROM catalogue_seed")
@@ -54,7 +63,13 @@ def update_catalogue(settings):
         available = cursor.fetchone()["total"]
         if available != total:
             raise ValueError(f"Expected {total} games for sale, found {available}.")
-        return available
+        connection.commit()
+    except BaseException:
+        rollback_write(connection)
+        raise
+    finally:
+        close_database(connection, cursor)
+    return available
 
 
 def main():
