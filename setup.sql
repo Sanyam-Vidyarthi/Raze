@@ -1,34 +1,23 @@
-CREATE DATABASE IF NOT EXISTS raze
+CREATE DATABASE raze_simple_db
     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-USE raze;
-SET NAMES utf8mb4;
+USE raze_simple_db;
 
-CREATE TABLE IF NOT EXISTS games (
-    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+CREATE TABLE games (
+    id INT AUTO_INCREMENT PRIMARY KEY,
     title VARCHAR(120) NOT NULL UNIQUE,
     genre VARCHAR(40) NOT NULL,
-    price DECIMAL(10, 2) NOT NULL CHECK (price >= 0),
+    price DECIMAL(10, 2) NOT NULL,
     developer VARCHAR(100) NOT NULL,
     platform VARCHAR(80) NOT NULL,
-    is_available BOOLEAN NOT NULL DEFAULT TRUE
+    is_available INT NOT NULL DEFAULT 1
 ) ENGINE = InnoDB;
 
-CREATE TABLE IF NOT EXISTS orders (
-    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    purchased_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE orders (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    purchased_on DATE NOT NULL
 ) ENGINE = InnoDB;
 
-CREATE TABLE IF NOT EXISTS order_items (
-    game_id INT UNSIGNED PRIMARY KEY,
-    order_id INT UNSIGNED NOT NULL,
-    price_paid DECIMAL(10, 2) NOT NULL CHECK (price_paid >= 0),
-    FOREIGN KEY (game_id) REFERENCES games(id),
-    FOREIGN KEY (order_id) REFERENCES orders(id)
-) ENGINE = InnoDB;
-
--- Catalogue seed
--- Stable IDs preserve catalogue edits when setup is rerun on a fresh installation.
--- Prices are illustrative INR. Platform identifies the version offered by RAZE.
+-- Initial catalogue of 32 games
 INSERT INTO games (id, title, genre, price, developer, platform) VALUES
     (4, 'Red Dead Redemption 2', 'Action-Adventure', 3199.00, 'Rockstar Games', 'Windows'),
     (3, 'Cyberpunk 2077', 'RPG', 2999.00, 'CD Projekt Red', 'Windows'),
@@ -61,5 +50,13 @@ INSERT INTO games (id, title, genre, price, developer, platform) VALUES
     (45, 'Phasmophobia', 'Survival Horror', 899.00, 'Kinetic Games', 'Windows'),
     (46, 'Fears to Fathom', 'Horror', 499.00, 'Rayll', 'Windows'),
     (47, 'Pacify', 'Horror', 299.00, 'Shawn Hitchcock', 'Windows'),
-    (48, 'Getting Over It with Bennett Foddy', 'Platformer', 349.00, 'Bennett Foddy', 'Windows')
-ON DUPLICATE KEY UPDATE id = games.id;
+    (48, 'Getting Over It with Bennett Foddy', 'Platformer', 349.00, 'Bennett Foddy', 'Windows');
+
+-- Create the last table after the seed so an interrupted setup is detectable.
+CREATE TABLE order_items (
+    game_id INT PRIMARY KEY,
+    order_id INT NOT NULL,
+    price_paid DECIMAL(10, 2) NOT NULL,
+    FOREIGN KEY (game_id) REFERENCES games(id),
+    FOREIGN KEY (order_id) REFERENCES orders(id)
+) ENGINE = InnoDB;
