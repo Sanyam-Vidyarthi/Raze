@@ -1,429 +1,335 @@
-"""Run RAZE in a Windows terminal."""
+"""Terminal menus and user input for RAZE."""
 
-import sys
-from getpass import getpass
-from textwrap import wrap
-
-from mysql.connector import Error as MySQLError
+from mysql.connector import Error
 
 import store
-from store import StoreError
 
 
 DEMO_ADMIN_PASSWORD = "raze-admin"
 
 
-def money(price):
-    return f"₹{price:,.2f}"
-
-
-def heading(title):
-    print(f"\n{title}")
-    print("-" * len(title))
-
-
-def select_game(games, action):
-    print(f"Enter a game number to {action}.")
-    while True:
-        value = input("Game number (0 to go back): ").strip()
-        if value.isascii() and value.isdecimal() and len(value) <= 10:
-            number = int(value)
-            if number == 0:
-                return None
-            if 1 <= number <= len(games):
-                return games[number - 1]
-        print(f"Enter a game number from 1 to {len(games)}, or 0 to go back.")
+def read_game_id(prompt, allow_back=False):
+    try:
+        game_id = int(input(prompt))
+        if game_id > 0:
+            return game_id
+        if allow_back and game_id == 0:
+            return None
+    except ValueError:
+        pass
+    print("Enter a valid game ID.")
+    return None
 
 
 def confirm(prompt):
     while True:
-        answer = input(f"{prompt} [y/N]: ").strip().lower()
-        if answer in ("y", "yes"):
+        answer = input(prompt + " (Y/N): ").strip().upper()
+        if answer == "Y":
             return True
-        if answer in ("", "n", "no"):
+        if answer == "N":
             return False
         print("Enter Y or N.")
 
 
-def status(game):
-    if game.get("owned"):
-        return "Already owned"
-    if not game["is_available"]:
-        return "Off sale"
-    return ""
-
-
-def show_games(games, price_label="Price", show_availability=False):
-    print(f'{"No.":>3} {"Game":26} {"Genre":19} {price_label:>14} Status')
-    print("-" * 79)
-    for index in range(len(games)):
-        game = games[index]
-        title_lines = wrap(game["title"], 26, break_on_hyphens=False)
-        genre_lines = wrap(game["genre"], 19, break_on_hyphens=False)
-        price = "—"
-        if game["price"] is not None:
-            price = money(game["price"])
-        game_status = status(game)
-        if show_availability:
-            if game["is_available"]:
-                game_status = "For sale"
-            else:
-                game_status = "Off sale"
-
-        for line in range(max(len(title_lines), len(genre_lines))):
-            title = ""
-            genre = ""
-            if line < len(title_lines):
-                title = title_lines[line]
-            if line < len(genre_lines):
-                genre = genre_lines[line]
-            if line == 0:
-                print(f"{index + 1:>3} {title:26} {genre:19} {price:>14} {game_status}".rstrip())
-            else:
-                print(f"    {title:26} {genre}".rstrip())
-
-
-def show_details(game, price_label="Price"):
-    heading(game["title"])
-    print(f'Genre      {game["genre"]}')
-    print(f'Developer  {game["developer"]}')
-    print(f'Platform   {game["platform"]}')
-    print(f'{price_label:10} {money(game["price"])}')
-    game_status = status(game)
-    if game_status:
-        print(f"Status     {game_status}")
-
-
-def show_error(error):
-    if isinstance(error, MySQLError):
-        message = store.database_error_message(error)
-    else:
-        message = str(error)
-    print(f"\n{message}")
-
-
-def read_menu_choice(options, exit_label="Back"):
-    print()
-    for index in range(len(options)):
-        print(f"{index + 1}. {options[index]}")
-    exit_number = len(options) + 1
-    print(f"{exit_number}. {exit_label}")
-
-    while True:
-        choice = input("Choose an option: ").strip()
-        if choice == "0" or choice == str(exit_number):
-            return 0
-        for number in range(1, exit_number):
-            if choice == str(number):
-                return number
-        print("Choose one of the numbered options.")
-
-
-def main_menu(settings, cart_ids):
-    options = (
-        "Browse Games",
-        "Search Games",
-        "Browse by Genre",
-        "Shopping Cart",
-        "My Game Library",
-        "Administrator Panel",
-    )
-    while True:
-        heading("RAZE | VIDEO GAME MARKETPLACE")
-        choice = read_menu_choice(options, "Exit")
-        try:
-            if choice == 0:
-                return
-            if choice == 1:
-                game_picker(settings, cart_ids, "Browse Games", store.catalogue(settings))
-            elif choice == 2:
-                search(settings, cart_ids)
-            elif choice == 3:
-                browse_genres(settings, cart_ids)
-            elif choice == 4:
-                cart_menu(settings, cart_ids)
-            elif choice == 5:
-                library(settings)
-            elif choice == 6:
-                admin_menu(settings)
-        except (StoreError, MySQLError) as error:
-            show_error(error)
-
-
-def search(settings, cart_ids):
-    term = input("Search by title (blank to go back): ").strip()
-    if term:
-        game_picker(settings, cart_ids, "Search Results", store.catalogue(settings, search=term))
-
-def browse_genres(settings, cart_ids):
-    genres = store.genres(settings)
-    if not genres:
-        print("There are no genres available to browse.")
-        return
-
-    while True:
-        heading("Browse by Genre")
-        choice = read_menu_choice(genres)
-        if choice == 0:
-            return
-        genre = genres[choice - 1]
-        try:
-            game_picker(settings, cart_ids, genre, store.catalogue(settings, genre=genre))
-        except (StoreError, MySQLError) as error:
-            show_error(error)
-
-
-def game_picker(settings, cart_ids, title, games):
-    heading(title)
+def choose_game(connection, cursor, games, cart):
     if not games:
         print("No games found.")
         return
-    show_games(games)
-    game = select_game(games, "view details or add the game to your cart")
-    if game is None:
-        return
 
-    show_details(game)
-    if not game["owned"] and confirm("Add to cart?"):
-        store.add_to_cart(settings, cart_ids, game["id"])
-        print(f'{game["title"]} added to your cart.')
-
-def cart_menu(settings, cart_ids):
-    options = ("Remove a Game", "Checkout")
-    while True:
-        heading("Shopping Cart")
-        try:
-            games = show_cart(settings, cart_ids)
-            choice = read_menu_choice(options)
-            if choice == 0:
-                return
-            if choice == 1:
-                remove_cart_game(cart_ids, games)
-            elif choice == 2:
-                checkout(settings, cart_ids)
-        except StoreError as error:
-            show_error(error)
-        except MySQLError as error:
-            show_error(error)
-            return
-
-
-def show_cart(settings, cart_ids):
-    catalogue_games = store.cart_games(settings, cart_ids)
-    total = store.total_price(catalogue_games)
-
-    # A deleted catalogue row can still be removed from the session's cart.
-    games_by_id = {}
-    for game in catalogue_games:
-        games_by_id[game["id"]] = game
-
-    games = []
-    for game_id in sorted(cart_ids):
-        if game_id in games_by_id:
-            games.append(games_by_id[game_id])
-        else:
-            games.append({
-                "id": game_id,
-                "title": "Game no longer in catalogue",
-                "genre": "",
-                "price": None,
-                "is_available": False,
-            })
-
-    if games:
-        show_games(games)
-    else:
-        print("Your cart is empty.")
-    print(f"Cart total  {money(total)}")
-    return games
-
-
-def remove_cart_game(cart_ids, games):
-    if not games:
-        print("Your cart is empty.")
-        return
-    game = select_game(games, "remove it from your cart")
-    if game is not None:
-        store.remove_from_cart(cart_ids, game["id"])
-        print("Game removed from your cart.")
-
-def checkout(settings, cart_ids):
-    games = store.checkout_quote(settings, cart_ids)
-    heading("Confirm Simulated Purchase")
+    owned_ids = store.get_owned_ids(cursor)
     for game in games:
-        print(f'  {game["title"]}  {money(game["price"])}')
-    print(f"Final total  {money(store.total_price(games))}")
-    if not confirm("Complete this simulated purchase?"):
-        print("Checkout cancelled. Your cart is saved for this session.")
-        return
-    order_id = store.checkout(settings, cart_ids, games)
-    print(f"Order #{order_id} complete. Find your games in My Game Library.")
+        status = "Unowned"
+        if game[0] in owned_ids:
+            status = "Owned"
+        print(game[0], "-", game[1], "|", game[2], "| INR", game[3], "|", status)
 
-def library(settings):
-    heading("My Game Library")
-    games = store.library(settings)
+    game_id = read_game_id("Enter a game ID to view details (0 to go back): ", True)
+    if game_id is None:
+        return
+    for game in games:
+        if game[0] == game_id:
+            show_game_details(connection, cursor, game, cart, owned_ids)
+            return
+    print("No game with that ID is in this list.")
+
+
+def show_game_details(connection, cursor, game, cart, owned_ids):
+    print("\nTitle:", game[1])
+    print("Genre:", game[2])
+    print("Developer:", game[4])
+    print("Platform:", game[5])
+    print("Price: INR", game[3])
+
+    problem = store.purchase_problem(game, owned_ids)
+    if problem:
+        print(problem)
+    elif game[0] in cart:
+        print("That game is already in your cart.")
+    elif confirm("Add this game to your cart?"):
+        # Read again in case the catalogue or library changed during the prompt.
+        connection.rollback()
+        current_game = store.get_game(cursor, game[0])
+        problem = store.purchase_problem(current_game, store.get_owned_ids(cursor))
+        if problem:
+            print(problem)
+        else:
+            cart.append(game[0])
+            print(game[1], "added to your cart.")
+
+
+def browse_genres(connection, cursor, cart):
+    genres = store.get_genres(cursor)
+    if not genres:
+        print("No genres are available.")
+        return
+    for row in genres:
+        print(row[0])
+    genre = input("Enter a genre (blank to go back): ").strip()
+    if genre:
+        choose_game(connection, cursor, store.get_games(cursor, genre=genre), cart)
+
+
+def view_cart(cursor, cart):
+    if not cart:
+        print("Your cart is empty.")
+        return
+    total = 0
+    for game_id in cart:
+        game = store.get_game(cursor, game_id)
+        if game is None:
+            print(game_id, "- Game no longer in the catalogue")
+        else:
+            status = ""
+            if not game[6]:
+                status = "(Off sale)"
+            print(game_id, "-", game[1], "| INR", game[3], status)
+            total += game[3]
+    print("Cart total: INR", total)
+
+
+def checkout(connection, cursor, cart):
+    games, problem = store.get_purchase_games(cursor, cart)
+    if problem:
+        print(problem)
+        return
+
+    print("\nSimulated Purchase")
+    prices = []
+    total = 0
+    for game in games:
+        print(game[0], "-", game[1], "| INR", game[3])
+        prices.append(game[3])
+        total += game[3]
+    print("Final total: INR", total)
+    if not confirm("Complete this purchase?"):
+        print("Checkout cancelled. Your cart is saved.")
+        return
+
+    order_id, problem = store.purchase_games(connection, cursor, cart, prices)
+    if problem:
+        print(problem)
+    else:
+        cart[:] = []
+        print("Order", order_id, "complete. Find your games in My Game Library.")
+
+
+def shopping_cart(connection, cursor, cart):
+    while True:
+        print("\nShopping Cart")
+        print("1. View Cart\n2. Remove a Game\n3. Checkout\n4. Back")
+        choice = input("Enter your choice: ").strip()
+        connection.rollback()
+        if choice == "1":
+            view_cart(cursor, cart)
+        elif choice == "2":
+            if not cart:
+                print("Your cart is empty.")
+            else:
+                view_cart(cursor, cart)
+                game_id = read_game_id("Enter the game ID to remove: ")
+                if game_id in cart:
+                    cart.remove(game_id)
+                    print("Game removed from your cart.")
+                elif game_id is not None:
+                    print("That game is not in your cart.")
+        elif choice == "3":
+            checkout(connection, cursor, cart)
+        elif choice == "4":
+            return
+        else:
+            print("Invalid menu choice.")
+
+
+def my_library(cursor):
+    games = store.get_library(cursor)
     if not games:
         print("Your library is empty.")
-        return
-    show_games(games, price_label="Paid")
-    game = select_game(games, "view purchase details")
-    if game is not None:
-        show_details(game, price_label="Paid")
-        print(f'Order      #{game["order_id"]} on {game["purchased_at"]:%d %b %Y}')
+    for game_id, title, genre, developer, platform, price, order_id, date in games:
+        print("\n", game_id, "-", title, "|", genre)
+        print("Developer:", developer, "| Platform:", platform)
+        print("Paid: INR", price, "| Order:", order_id, "| Purchased:", date)
 
-def admin_menu(settings):
-    password = getpass("Demo administrator password (blank to go back): ")
+
+def valid_price(price):
+    rupees, point, paise = price.partition(".")
+    digits = "0123456789"
+    if not rupees or len(rupees) > 8 or rupees.strip(digits):
+        return False
+    if point and (not paise or len(paise) > 2 or paise.strip(digits)):
+        return False
+    return True
+
+
+def add_game(connection, cursor):
+    title = input("Title: ").strip()
+    genre = input("Genre: ").strip()
+    developer = input("Developer: ").strip()
+    platform = input("Platform: ").strip()
+    price = input("Price in INR: ").strip()
+    if not title or not genre or not developer or not platform:
+        print("Title, genre, developer and platform are required.")
+    elif not valid_price(price):
+        print("Enter a price from 0 to 99999999.99 with at most two decimal places.")
+    else:
+        store.save_game(connection, cursor, (title, genre, developer, platform, price))
+        print(title, "added to the catalogue.")
+
+
+def edit_game(connection, cursor, game):
+    print("Press Enter to keep the current value.")
+    title = input("Title [" + game[1] + "]: ").strip() or game[1]
+    genre = input("Genre [" + game[2] + "]: ").strip() or game[2]
+    developer = input("Developer [" + game[4] + "]: ").strip() or game[4]
+    platform = input("Platform [" + game[5] + "]: ").strip() or game[5]
+    current_price = str(game[3])
+    price = input("Price in INR [" + current_price + "]: ").strip() or current_price
+    if not valid_price(price):
+        print("Enter a price from 0 to 99999999.99 with at most two decimal places.")
+        return
+    store.save_game(connection, cursor, (title, genre, developer, platform, price), game[0])
+    print("Game details saved.")
+
+
+def admin_menu(connection, cursor):
+    password = input("Demo administrator password (blank to go back): ")
     if not password:
         return
     if password != DEMO_ADMIN_PASSWORD:
         print("Administrator access denied.")
         return
 
-    options = (
-        "View Catalogue",
-        "Add a Game",
-        "Edit a Game",
-        "Remove a Game from Sale",
-        "View Sales Summary",
-        "Put a Game Back on Sale",
-    )
     while True:
-        heading("Administrator Panel")
-        choice = read_menu_choice(options)
+        print("\nAdministrator Panel")
+        print("1. View Catalogue\n2. Add a Game\n3. Edit a Game")
+        print("4. Remove a Game from Sale\n5. View Sales Summary")
+        print("6. Put a Game Back on Sale\n7. Back")
+        choice = input("Enter your choice: ").strip()
         try:
-            if choice == 0:
+            connection.rollback()
+            if choice == "1":
+                for game in store.get_catalogue(cursor):
+                    status = "Off sale"
+                    if game[6]:
+                        status = "For sale"
+                    print(game[0], "-", game[1], "|", game[2], "| INR", game[3], "|", status)
+            elif choice == "2":
+                add_game(connection, cursor)
+            elif choice in ("3", "4", "6"):
+                game_id = read_game_id("Enter the game ID: ")
+                if game_id is None:
+                    continue
+                game = store.get_game(cursor, game_id)
+                if game is None:
+                    print("No game has that ID.")
+                elif choice == "3":
+                    edit_game(connection, cursor, game)
+                elif choice == "4":
+                    if not game[6]:
+                        print("That game is already off sale.")
+                    elif confirm("Remove " + game[1] + " from sale?"):
+                        store.change_availability(connection, cursor, game_id, 0)
+                        print("Game removed from sale.")
+                elif game[6]:
+                    print("That game is already on sale.")
+                else:
+                    store.change_availability(connection, cursor, game_id, 1)
+                    print("Game is back on sale.")
+            elif choice == "5":
+                quantity, revenue = store.sales_summary(cursor)
+                print("Games purchased:", quantity)
+                print("Simulated revenue: INR", revenue)
+            elif choice == "7":
                 return
-            if choice == 1:
-                admin_catalogue(settings)
-            elif choice == 2:
-                add_game(settings)
-            elif choice == 3:
-                edit_game(settings)
-            elif choice == 4:
-                delist_game(settings)
-            elif choice == 5:
-                sales(settings)
-            elif choice == 6:
-                relist_game(settings)
-        except (StoreError, MySQLError) as error:
-            show_error(error)
+            else:
+                print("Invalid menu choice.")
+        except Error as error:
+            connection.rollback()
+            print("MySQL could not complete the change:", error)
 
 
-def admin_catalogue(settings):
-    heading("Full Catalogue")
-    game = select_admin_game(settings, "view its details")
-    if game is not None:
-        show_details(game)
-
-def select_admin_game(settings, action, off_sale_only=False):
-    games = store.catalogue(settings, include_unavailable=True)
-    if off_sale_only:
-        off_sale_games = []
-        for game in games:
-            if not game["is_available"]:
-                off_sale_games.append(game)
-        games = off_sale_games
-        if not games:
-            print("No games are off sale.")
-            return None
-    elif not games:
-        print("There are no games in the catalogue.")
-        return None
-
-    show_games(games, show_availability=True)
-    return select_game(games, action)
-
-
-def add_game(settings):
-    heading("Add a Game")
-    details = game_form()
-    if confirm("Add this game to the catalogue?"):
-        store.save_game(settings, details)
-        print(f'{details["title"]} added to the catalogue.')
-
-def edit_game(settings):
-    game = select_admin_game(settings, "edit it")
-    if game is not None:
-        heading(f'Edit {game["title"]}')
-        print("Press Enter to keep the current value.")
-        details = game_form(game)
-        if confirm("Save these changes?"):
-            store.save_game(settings, details, game["id"])
-            print("Game details saved.")
-
-def delist_game(settings):
-    game = select_admin_game(settings, "remove it from sale")
-    if game is not None:
-        if not game["is_available"]:
-            print("That game is already off sale.")
-        elif confirm(f'Remove {game["title"]} from sale?'):
-            store.remove_from_sale(settings, game["id"])
-            print("Game removed from sale. Existing purchases are still in the library.")
-
-def relist_game(settings):
-    heading("Put a Game Back on Sale")
-    game = select_admin_game(settings, "put it back on sale", off_sale_only=True)
-    if game is not None and confirm(f'Put {game["title"]} back on sale?'):
-        store.put_back_on_sale(settings, game["id"])
-        print(f'{game["title"]} is back on sale.')
-
-def sales(settings):
-    summary = store.sales_summary(settings)
-    heading("Sales Summary")
-    print(f'Games purchased    {summary["games_sold"]:,}')
-    print(f'Simulated revenue  {money(summary["revenue"])}')
-    if summary["games_sold"] == 0:
-        print("No purchases recorded yet.")
-
-
-def game_form(current=None):
-    details = {}
-    for key, label, length in store.GAME_FIELDS:
-        prompt = f"{label}: "
-        if current is not None:
-            prompt = f"{label} [{current[key]}]: "
-        while True:
-            value = input(prompt).strip()
-            if not value and current is not None:
-                value = current[key]
-            try:
-                details[key] = store.validate_text(value, label, length)
-                break
-            except StoreError as error:
-                show_error(error)
-
-    prompt = "Price in INR: "
-    if current is not None:
-        prompt = f'Price in INR [{current["price"]}]: '
+def main_menu(connection, cursor):
+    cart = []
     while True:
-        value = input(prompt).strip()
-        if not value and current is not None:
-            value = str(current["price"])
+        print("\nRAZE — VIDEO GAME MARKETPLACE")
+        print("1. Browse Games\n2. Search Games\n3. Browse by Genre")
+        print("4. Shopping Cart\n5. My Game Library\n6. Administrator Panel\n7. Exit")
+        choice = input("Enter your choice: ").strip()
         try:
-            store.parse_price(value)
-            details["price"] = value
-            return details
-        except StoreError as error:
-            show_error(error)
+            connection.rollback()
+            if choice == "1":
+                choose_game(connection, cursor, store.get_games(cursor), cart)
+            elif choice == "2":
+                title = input("Search by title (blank to go back): ").strip()
+                if title:
+                    choose_game(connection, cursor, store.get_games(cursor, title=title), cart)
+            elif choice == "3":
+                browse_genres(connection, cursor, cart)
+            elif choice == "4":
+                shopping_cart(connection, cursor, cart)
+            elif choice == "5":
+                my_library(cursor)
+            elif choice == "6":
+                admin_menu(connection, cursor)
+            elif choice == "7":
+                return
+            else:
+                print("Invalid menu choice.")
+        except Error as error:
+            connection.rollback()
+            print("MySQL could not complete the operation:", error)
 
 
 def main():
-    # Use UTF-8 for the rupee symbol in both the console and redirected output.
-    sys.stdout.reconfigure(encoding="utf-8")
+    connection = None
+    cursor = None
     try:
-        settings = store.connection_settings()
-        cart_ids = []
-        store.sales_summary(settings)  # Detect configuration or setup errors before opening the menu.
-        main_menu(settings, cart_ids)
-    except (KeyboardInterrupt, EOFError):
+        username = input("MySQL username: ").strip()
+        password = input("MySQL password: ")
+        try:
+            connection = store.connect_database(username, password)
+            cursor = connection.cursor()
+            if not store.setup_database(connection, cursor):
+                print("Setup error: raze_simple_db has an incomplete or incompatible schema.")
+                return
+        except Error as error:
+            print("MySQL setup failed. Check that MySQL is running and your account has access.")
+            print(error)
+            return
+        except OSError as error:
+            print("Setup could not read setup.sql:", error)
+            return
+
+        main_menu(connection, cursor)
+    except (EOFError, KeyboardInterrupt):
         print("\nSession ended.")
-    except (ValueError, MySQLError) as error:
-        show_error(error)
-        return 1
-    else:
-        print("\nThanks for visiting RAZE.")
-    return 0
+    except Error as error:
+        print("MySQL connection error:", error)
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if connection is not None:
+            connection.close()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
