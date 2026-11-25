@@ -3,6 +3,7 @@
 from mysql.connector import Error
 
 import store
+from setup import setup_database
 
 
 DEMO_ADMIN_PASSWORD = "raze-admin"
@@ -306,17 +307,14 @@ def main():
         username = input("MySQL username: ").strip()
         password = input("MySQL password: ")
         try:
-            connection = store.connect_database(username, password)
-            cursor = connection.cursor()
-            if not store.setup_database(connection, cursor):
+            connection = setup_database(username, password)
+            if connection is None:
                 print("Setup error: raze_simple_db has an incomplete or incompatible schema.")
                 return
+            cursor = connection.cursor()
         except Error as error:
             print("MySQL setup failed. Check that MySQL is running and your account has access.")
             print(error)
-            return
-        except OSError as error:
-            print("Setup could not read setup.sql:", error)
             return
 
         main_menu(connection, cursor)
